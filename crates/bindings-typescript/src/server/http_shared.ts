@@ -1,4 +1,4 @@
-import { Headers, headersToList } from 'headers-polyfill';
+import { Headers } from 'headers-polyfill';
 import type {
   HttpHeaders,
   HttpMethod,
@@ -59,12 +59,36 @@ export function serializeMethod(method?: string): HttpMethod {
   );
 }
 
+/**
+ * Serialize a `Headers` object into the wire shape, one entry per header.
+ *
+ * This deliberately does not use `headersToList`, which splits any value
+ * containing a comma into several headers:
+ *
+ *   value.includes(',') ? value.split(',').map(v => v.trim()) : value
+ *
+ * A comma is legal inside a single header value, and it is *ordinary* in
+ * the ones carrying an HTTP date, which always has one after the weekday.
+ * `Set-Cookie` with an `Expires` attribute is the case that bites: it
+ * arrives split in two, and a `__Host-` cookie that loses its `Secure`
+ * attribute to the split is rejected by the browser outright, so cookie
+ * authentication cannot work at all. `Date`, `Expires` and `Last-Modified`
+ * are mangled the same way.
+ *
+ * `Set-Cookie` is the one response header that legitimately repeats, and
+ * `getSetCookie()` is the accessor that returns those values individually
+ * (it splits with set-cookie-parser, which understands the dates).
+ */
 export function serializeHeaders(headers: Headers): HttpHeaders {
-  return {
-    entries: headersToList(headers as any)
-      .flatMap(([k, v]) => (Array.isArray(v) ? v.map(v => [k, v]) : [[k, v]]))
-      .map(([name, value]) => ({ name, value: textEncoder.encode(value) })),
-  };
+  const entries: HttpHeaders['entries'] = [];
+  headers.forEach((value, name) => {
+    if (name.toLowerCase() === 'set-cookie') return;
+    entries.push({ name, value: textEncoder.encode(value) });
+  });
+  for (const cookie of headers.getSetCookie()) {
+    entries.push({ name: 'set-cookie', value: textEncoder.encode(cookie) });
+  }
+  return { entries };
 }
 
 export function deserializeHeaders(headers: HttpHeaders): Headers {
